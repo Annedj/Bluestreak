@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Bluesky Streak Tracker",
+  "version": "1.0",
+  "permissions": ["storage"],
+  "host_permissions": ["https://bsky.social/*"],
+  "action": {
+    "default_icon": {
+      "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "content_scripts": [{
+    "matches": ["https://bsky.app/*"],
+    "js": ["content.js"],
+    "css": ["styles.css"]
+  }],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "images/posted.png",
+        "images/not-posted.png"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
