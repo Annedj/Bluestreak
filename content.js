@@ -20,7 +20,11 @@ class StreakManager {
       const nav = document.querySelector('nav');
       if (nav) {
         obs.disconnect();
-        this.updateOrInsertStreakInfo();
+        // First do a quick check for today's posts
+        this.quickCheckTodaysPosts().then(() => {
+          // Then do the full streak calculation if needed
+          this.updateOrInsertStreakInfo();
+        });
       }
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -151,6 +155,43 @@ class StreakManager {
     }
   }
 
+  async quickCheckTodaysPosts() {
+    try {
+      const storedData = JSON.parse(localStorage.getItem('bluestreak') || '{}');
+      const { streakNumber = 0 } = storedData;
+
+      // Only proceed if we have a stored streak
+      if (streakNumber === 0) return;
+
+      const handle = await this.getProfile();
+      const hasPostedToday = await this.checkRecentPostsForToday(handle);
+
+      // If we already counted today's post, no need to update
+      if (storedData.postedToday === hasPostedToday) return;
+
+      // If we newly detected a post today
+      if (hasPostedToday && !storedData.postedToday) {
+        const newStreak = streakNumber + (storedData.postedToday ? 0 : 1);
+
+        localStorage.setItem('bluestreak', JSON.stringify({
+          streakDate: new Date().toISOString(),
+          streakNumber: newStreak,
+          postedToday: true
+        }));
+
+        // Update the UI
+        const helpLink = document.querySelector('a[aria-label="Help"]');
+        if (helpLink) {
+          const container = helpLink.parentElement.parentElement;
+          this.removeExistingStreakContainers();
+          this.createStreakDisplay(container, newStreak, true);
+        }
+      }
+    } catch (error) {
+      console.error('Error in quick check:', error);
+    }
+  }
+
   async refreshStreak() {
     if (this.isRefreshing) return; // Prevent multiple refreshes
 
@@ -202,27 +243,22 @@ class StreakManager {
         const handle = await this.getProfile();
         const container = helpLink.parentElement.parentElement;
 
-        // Only show loading indicator if not refreshing (to avoid flicker)
         if (!this.isRefreshing) {
           this.removeExistingStreakContainers();
           container.appendChild(this.createLoadingIndicator());
         }
 
-        // Check if posted today
         const hasPostedToday = await this.checkRecentPostsForToday(handle);
-
-        // Calculate base streak (up to yesterday)
         let streak = await this.calculateStreak(handle);
 
-        // If we've posted today, add one to the streak
         if (hasPostedToday) {
           streak += 1;
         }
 
-        // Save the current streak
         localStorage.setItem('bluestreak', JSON.stringify({
           streakDate: new Date().toISOString(),
-          streakNumber: streak
+          streakNumber: streak,
+          postedToday: hasPostedToday
         }));
 
         this.removeExistingStreakContainers();
