@@ -3,6 +3,7 @@ class StreakManager {
     this.BSKY_API = 'https://public.api.bsky.app/xrpc';
     this.cache = new Map();
     this.debounceTimeout = null;
+    this.isRefreshing = false;
     this.init();
   }
 
@@ -106,7 +107,18 @@ class StreakManager {
 
   async calculateStreak(handle) {
     let streak = 0;
-    let currentDate = new Date();
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+
+    // First check yesterday to determine if we should continue counting
+    const hasPostedYesterday = await this.getPostsForDay(handle, yesterday);
+    if (!hasPostedYesterday) {
+      return 0; // Streak is broken if no post yesterday
+    }
+
+    // Start counting from yesterday
+    let currentDate = yesterday;
 
     while (true) {
       try {
@@ -140,16 +152,49 @@ class StreakManager {
   }
 
   async refreshStreak() {
-    localStorage.removeItem('bluestreak');
-    this.updateOrInsertStreakInfo();
+    if (this.isRefreshing) return; // Prevent multiple refreshes
+
+    try {
+      this.isRefreshing = true;
+      const helpLink = document.querySelector('a[aria-label="Help"]');
+      if (!helpLink) throw new Error('Help link not found');
+
+      const container = helpLink.parentElement.parentElement;
+      const existingContainer = container.querySelector('.streak-main-container');
+
+      if (existingContainer) {
+        const refreshButton = existingContainer.querySelector('.streak-refresh');
+        const streakText = existingContainer.querySelector('span');
+
+        // Save the original text and update to "Refreshing..."
+        const originalText = streakText.textContent;
+        refreshButton.textContent = '⌛'; // Change to hourglass
+        streakText.textContent = 'Refreshing...';
+
+        // Clear cache and local storage
+        this.cache.clear();
+        localStorage.removeItem('bluestreak');
+
+        // Wait a moment to show the refreshing state
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Recalculate streak
+        await this.updateOrInsertStreakInfo();
+      }
+    } catch (error) {
+      console.error('Error during refresh:', error);
+      this.showError('Failed to refresh streak. Please try again.');
+    } finally {
+      this.isRefreshing = false;
+    }
   }
 
   async updateOrInsertStreakInfo() {
-    if (this.debounceTimeout) {
+    if (this.debounceTimeout && !this.isRefreshing) {
       clearTimeout(this.debounceTimeout);
     }
 
-    this.debounceTimeout = setTimeout(async () => {
+    const updateFunc = async () => {
       try {
         const helpLink = document.querySelector('a[aria-label="Help"]');
         if (!helpLink) throw new Error('Help link not found');
@@ -157,36 +202,26 @@ class StreakManager {
         const handle = await this.getProfile();
         const container = helpLink.parentElement.parentElement;
 
-        this.removeExistingStreakContainers();
-        container.appendChild(this.createLoadingIndicator());
-
-        const today = new Date(StreakManager.getUTCDate());
-        // today.setDate(today.getDate() + 1);
-        console.log("🚀 ~ today:", today);
-
-        const bluestreak = JSON.parse(localStorage.getItem('bluestreak')) || {};
-        const { streakDate, streakNumber = 0 } = bluestreak;
-
-        let streak = streakNumber;
-        let hasPostedToday = streakDate === today;
-
-        console.log("🚀 ~ streakDate:", streakDate);
-        console.log("🚀 ~ hasPostedToday:", hasPostedToday);
-        console.log("🚀 ~ today - streakDate:", today.getDate() - new Date(streakDate).getDate())
-        if (today.getDate() - new Date(streakDate).getDate() > 1) {
-          hasPostedToday = false;
-          streak = 0;
-        } else if (!streakDate || streakDate < today) {
-          if (streakDate && new Date(streakDate).getDate() === new Date(today).getDate() - 1) {
-            hasPostedToday = await this.getPostsForDay(handle, new Date());
-            streak = hasPostedToday ? streakNumber + 1 : streakNumber;
-          } else {
-            streak = await this.calculateStreak(handle);
-            hasPostedToday = streak > 0;
-          }
+        // Only show loading indicator if not refreshing (to avoid flicker)
+        if (!this.isRefreshing) {
+          this.removeExistingStreakContainers();
+          container.appendChild(this.createLoadingIndicator());
         }
+
+        // Check if posted today
+        const hasPostedToday = await this.checkRecentPostsForToday(handle);
+
+        // Calculate base streak (up to yesterday)
+        let streak = await this.calculateStreak(handle);
+
+        // If we've posted today, add one to the streak
+        if (hasPostedToday) {
+          streak += 1;
+        }
+
+        // Save the current streak
         localStorage.setItem('bluestreak', JSON.stringify({
-          streakDate: hasPostedToday ? today : streakDate,
+          streakDate: new Date().toISOString(),
           streakNumber: streak
         }));
 
@@ -197,7 +232,13 @@ class StreakManager {
         console.error('Error updating streak:', error);
         this.showError('Failed to update streak. Please refresh.');
       }
-    }, 300);
+    };
+
+    if (this.isRefreshing) {
+      await updateFunc();
+    } else {
+      this.debounceTimeout = setTimeout(updateFunc, 300);
+    }
   }
 
   removeExistingStreakContainers() {
@@ -240,6 +281,29 @@ class StreakManager {
     }
 
     container.appendChild(mainContainer);
+  }
+
+  async checkRecentPostsForToday(handle) {
+    const params = new URLSearchParams({
+      actor: handle,
+      limit: '5',
+      filter: 'posts_no_replies'
+    });
+
+    try {
+      const response = await this.fetchWithTimeout(
+        `${this.BSKY_API}/app.bsky.feed.getAuthorFeed?${params}`
+      );
+      const data = await response.json();
+
+      const today = StreakManager.getUTCDate();
+      return data.feed.some(post =>
+        StreakManager.getUTCDate(new Date(post.post.indexedAt)) === today
+      );
+    } catch (error) {
+      console.error('Error fetching recent posts:', error);
+      return false;
+    }
   }
 }
 
